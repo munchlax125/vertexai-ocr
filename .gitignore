@@ -1,0 +1,7 @@
+.env
+pdf-ocr.json
+__pycache__/
+masked-pdfs/
+ex/
+pdfs/
+pdfp.py

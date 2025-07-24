@@ -1,0 +1,31 @@
+# PDF OCR 통합 처리 시스템 - 의존성 패키지 (Vertex AI 버전)
+# ========================================
+
+# 웹 프레임워크 (필수)
+Flask==3.0.0
+Flask-CORS==4.0.0
+
+# Google Vertex AI 라이브러리 (필수)
+google-cloud-aiplatform==1.38.0
+vertexai>=1.38.0
+
+# Google Sheets API (기존 유지)
+gspread==5.12.0
+google-auth==2.23.4
+google-auth-oauthlib==1.1.0
+google-auth-httplib2==0.1.1
+
+# PDF 처리 (필수)
+PyMuPDF==1.23.8
+
+# HTTP 및 환경 설정 (필수)
+requests==2.31.0
+python-dotenv==1.0.0
+
+# 유틸리티 및 보안 (선택적)
+markdown-it-py==3.0.0
+bleach==6.1.0
+Flask-Limiter==3.5.0
+
+# 추가 유틸리티
+Pillow==10.1.0  # 이미지 처리 (PDF 변환시 필요할 수 있음)
