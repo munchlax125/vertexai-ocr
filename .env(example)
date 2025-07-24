@@ -1,4 +1,4 @@
 # Vertex AI 설정
 GOOGLE_CLOUD_PROJECT=your-project-id-here
-GOOGLE_CLOUD_LOCATION=us-central1
+GOOGLE_CLOUD_LOCATION=asia-northeast3
 GOOGLE_APPLICATION_CREDENTIALS=./pdf-ocr.json
