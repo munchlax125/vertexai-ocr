@@ -81,6 +81,8 @@ GEMINI_PROMPT = f"""
 - **빈 값 처리**: '사업장별 수입금액' 표의 특정 행에는 **'사업자 등록번호'와 '상호' 값이 비어 있을 수 있습니다. 이것은 정상적인 상황입니다.**
 - **데이터 밀림 방지**: '상호' 열 아래에 값이 없다고 해서 **그 다음 열의 값(예: '수입금액 구분코드')을 '상호' 필드에 넣으면 절대 안 됩니다.** '상호' 열이 비어있으면 '상호' 필드는 ""(빈칸)으로 처리해야 합니다.
 
+- **'상호' 필드 특정 값 제외**: '상호' 필드에 '사업소득지급명세서 등 결정자료'라는 텍스트가 절대 포함되어서는 안 됩니다. 이 텍스트는 상호가 아니므로, 이 값이 발견되면 '상호' 필드를 ""(빈칸)으로 처리하세요.
+
 ### 필드별 데이터 출처
 - **절대로 '※타소득(합산대상)자료유무'라는 제목 자체를 값으로 사용하지 마세요.**
 
@@ -175,6 +177,8 @@ def extract_data_with_vertex_ai(file_path: str, prompt: str, file_number: int, t
         try:
             if max_retries > 1:
                 log_progress(f"🔄 [{file_number}/{total_files}] Vertex AI OCR 시도 {attempt + 1}/{max_retries}")
+        try:            
+            log_progress(f"   🔄 Vertex AI 분석 중... (시도 {attempt + 1}/{max_retries})")
             
             # Vertex AI GenerativeModel 생성
             model = GenerativeModel("gemini-2.5-flash")
@@ -207,19 +211,18 @@ def extract_data_with_vertex_ai(file_path: str, prompt: str, file_number: int, t
             extracted_data = safe_extract_json(response.text)
             
             if extracted_data is None:
-                log_progress(f"⚠️ [{file_number}/{total_files}] '{os.path.basename(file_path)}' JSON 추출 실패 (시도 {attempt + 1})")
+                log_progress(f"   ⚠️ JSON 추출 실패 (시도 {attempt + 1}). 재시도합니다...")
                 if attempt < max_retries - 1:
-                    log_progress(f"🔄 [{file_number}/{total_files}] '{os.path.basename(file_path)}' 재시도합니다...")
                     time.sleep(5)  # 재시도 전 대기
                     continue
                 else:
                     raise ValueError(f"❌ '{os.path.basename(file_path)}' 모든 시도에서 JSON 추출 실패")
             
-            log_progress(f"✅ [{file_number}/{total_files}] '{os.path.basename(file_path)}' Vertex AI OCR 성공! {len(extracted_data)}개 항목 발견")
+            log_progress(f"   ✅ OCR 성공 ({len(extracted_data)}개 항목 발견)")
             return extracted_data
             
         except Exception as e:
-            log_progress(f"❌ [{file_number}/{total_files}] '{os.path.basename(file_path)}' Vertex AI OCR 실패 (시도 {attempt + 1}): {e}")
+            log_progress(f"   ❌ OCR 실패 (시도 {attempt + 1}): {e}")
             if attempt == max_retries - 1:
                 raise
             time.sleep(5)  # 재시도 전 대기
@@ -229,13 +232,13 @@ def validate_and_fix_data(data_list, file_number, total_files, filename):
     추출된 데이터의 유효성을 검사하고 수정
     """
     if not isinstance(data_list, list):
-        log_progress(f"⚠️ [{file_number}/{total_files}] '{filename}' 데이터가 배열이 아닙니다. 배열로 변환합니다.")
+        log_progress(f"   ⚠️ 데이터가 배열이 아닙니다. 배열로 변환합니다.")
         return [data_list] if isinstance(data_list, dict) else []
     
     validated_data = []
     for i, item in enumerate(data_list):
         if not isinstance(item, dict):
-            log_progress(f"⚠️ [{file_number}/{total_files}] '{filename}' 항목 {i+1}이 객체가 아닙니다. 건너뜁니다.")
+            log_progress(f"   ⚠️ 항목 {i+1}이 객체가 아닙니다. 건너뜁니다.")
             continue
         
         # 모든 필드가 있는지 확인하고 없으면 추가
@@ -245,18 +248,17 @@ def validate_and_fix_data(data_list, file_number, total_files, filename):
         
         validated_data.append(item)
     
-    log_progress(f"✅ [{file_number}/{total_files}] '{filename}' 데이터 검증 완료. {len(validated_data)}개 항목 유효")
+    log_progress(f"   ✅ 데이터 검증 완료 ({len(validated_data)}개 항목 유효)")
     return validated_data
 
 def add_to_spreadsheet_batch(worksheet, rows_to_append, file_number, total_files, filename):
     """스프레드시트에 배치로 데이터 추가"""
     try:
-        log_progress(f"📊 [{file_number}/{total_files}] '{filename}' 구글시트에 {len(rows_to_append)}개 행 업로드 중...")
+        log_progress(f"   📊 구글시트에 {len(rows_to_append)}개 행 업로드 중...")
         worksheet.append_rows(rows_to_append)
-        log_progress(f"✅ [{file_number}/{total_files}] '{filename}' 구글시트 업로드 완료!")
         return True
     except Exception as e:
-        log_progress(f"❌ [{file_number}/{total_files}] '{filename}' 구글시트 업로드 실패: {e}")
+        log_progress(f"   ❌ 구글시트 업로드 실패: {e}")
         return False
 
 # --- 🚀 Main ---
@@ -365,6 +367,7 @@ def main():
     total_rows_added = 0
     error_count = 0
     successful_files = 0
+    file_color_index = 0 # 파일별 행 색상 교차를 위한 인덱스
 
     # 파일 처리 시작
     log_progress(f"{'='*25} 📄 Vertex AI 파일별 OCR 처리 시작 {'='*25}")
@@ -382,7 +385,7 @@ def main():
             
             # 파일 크기 정보 추가
             file_size = os.path.getsize(full_path) / 1024 / 1024  # MB
-            log_progress(f"📏 [{i}/{len(pdf_files)}] '{pdf_file}' 파일 크기: {file_size:.2f} MB")
+            log_progress(f" [{i}/{len(pdf_files)}] '{pdf_file}' 처리 시작 ({file_size:.2f} MB)")
             
             # Vertex AI로 데이터 추출
             extracted_data_list = extract_data_with_vertex_ai(full_path, GEMINI_PROMPT, i, len(pdf_files))
@@ -391,14 +394,13 @@ def main():
             validated_data = validate_and_fix_data(extracted_data_list, i, len(pdf_files), pdf_file)
             
             if not validated_data:
-                log_progress(f"⚠️ [{i}/{len(pdf_files)}] '{pdf_file}'에서 유효한 데이터를 찾지 못했습니다.")
+                log_progress(f"   ⚠️ 유효한 데이터를 찾지 못했습니다. 건너뜁니다.")
                 log_worksheet.append_row([pdf_file, "유효한 데이터 없음", datetime.now().strftime("%Y-%m-%d %H:%M:%S")])
                 continue
             
-            # 스프레드시트에 추가할 행들 준비
-            log_progress(f"📊 [{i}/{len(pdf_files)}] '{pdf_file}' 스프레드시트 데이터 준비 중...")
             rows_to_append = []
             invalid_row_count = 0
+            file_has_error = False # 파일 수준의 유효성 검사 오류 플래그
             for j, extracted_data in enumerate(validated_data):
                 # 모든 행에 파일 이름 표시 (확장자 제거)
                 file_name_without_ext = pdf_file.replace('.pdf', '')  # .pdf 확장자 제거
@@ -409,37 +411,74 @@ def main():
                 for field in EXTRACTION_FIELDS:
                     value = extracted_data.get(field, 'N/A')
                     original_value = value # 오류 로깅을 위해 원본 값 저장
-
+ 
                     if isinstance(value, str):
                         value = value.replace('\n', ' ').replace('\r', ' ')
-
-                    if field in currency_fields:
+ 
+                    if field in ["이자", "기타"]:
+                        processed_value = str(value).strip().upper()
+                        if processed_value and processed_value not in ['X', 'O']:
+                            error_message = f"행 {row_number}: 필드 '{field}'에 유효하지 않은 값 '{original_value}' ('X' 또는 'O'만 허용)"
+                            log_progress(f"   🚨 처리 중단. {error_message}")
+                            log_worksheet.append_row([pdf_file, error_message, datetime.now().strftime("%Y-%m-%d %H:%M:%S")])
+                            error_count += 1
+                            file_has_error = True
+                            break # 필드 루프 중단
+                        value = processed_value
+                    elif field in currency_fields:
                         value = clean_currency(str(value))
                     elif field == "업종 코드":
                         cleaned_value = clean_business_code(str(value))
                         if cleaned_value is None:
                             error_message = f"행 {row_number}: 유효하지 않은 업종 코드 '{original_value}'"
-                            log_progress(f"⚠️ [{i}/{len(pdf_files)}] '{pdf_file}'에서 오류 발견. {error_message}")
+                            log_progress(f"   ⚠️ 오류 발견. {error_message}")
                             log_worksheet.append_row([pdf_file, error_message, datetime.now().strftime("%Y-%m-%d %H:%M:%S")])
                             invalid_row_count += 1
                             is_row_valid = False
                             break # 이 행의 처리를 중단하고 다음 행으로
                         value = cleaned_value
                     data_row.append(str(value))
-
+ 
+                if file_has_error:
+                    break # 행 전체 루프 중단
+ 
                 if is_row_valid:
                     rows_to_append.append(data_row)
             
-            if invalid_row_count > 0:
-                log_progress(f"⚠️ [{i}/{len(pdf_files)}] '{pdf_file}'에서 총 {invalid_row_count}개의 유효하지 않은 행을 건너뛰었습니다.")
-            
+            if file_has_error:
+                continue # 오류가 발생한 파일이므로, 다음 파일로 넘어감
 
+            if invalid_row_count > 0:
+                log_progress(f"   ⚠️ 총 {invalid_row_count}개의 유효하지 않은 행을 건너뛰었습니다.")
+            
             # 스프레드시트에 실시간 추가
             if rows_to_append:
+                try:
+                    # 행을 추가하기 전, 현재 시트의 마지막 행 번호를 가져옵니다.
+                    last_row = len(worksheet.col_values(1))
+                except Exception as e:
+                    log_progress(f"   ⚠️ 시트의 마지막 행 번호를 가져오는 데 실패했습니다: {e}. 색상 적용을 건너뜁니다.")
+                    last_row = -1
+
                 success = add_to_spreadsheet_batch(worksheet, rows_to_append, i, len(pdf_files), pdf_file)
                 if success:
                     total_rows_added += len(rows_to_append)
                     successful_files += 1
+
+                    # --- 행 색상 교차 적용 로직 ---
+                    if file_color_index % 2 == 1:  # 홀수 번째 파일(두 번째, 네 번째...)에 배경색 적용
+                        if last_row != -1:
+                            start_row_to_format = last_row + 1
+                            end_row_to_format = last_row + len(rows_to_append)
+                            try:
+                                range_to_format = f"A{start_row_to_format}:{gspread.utils.get_column_letter(worksheet.col_count)}{end_row_to_format}"
+                                # 연한 파란색 (#eaf1fb)
+                                light_blue = {"red": 0.917, "green": 0.945, "blue": 0.984}
+                                log_progress(f"   🎨 '{range_to_format}' 범위에 배경색을 적용합니다.")
+                                worksheet.format(range_to_format, {"backgroundColor": light_blue})
+                            except Exception as e:
+                                log_progress(f"   ⚠️ 행 배경색 적용 실패: {e}")
+                    file_color_index += 1  # 성공적으로 추가된 파일에 대해서만 인덱스 증가
                 else:
                     log_worksheet.append_row([pdf_file, "스프레드시트 추가 실패", datetime.now().strftime("%Y-%m-%d %H:%M:%S")])
                     error_count += 1
@@ -449,15 +488,10 @@ def main():
             file_end_time = time.time()
             processing_time = file_end_time - file_start_time
             
-            log_progress(f"✅ [{i}/{len(pdf_files)}] '{pdf_file}' Vertex AI 처리 완료!")
-            log_progress(f"   📊 OCR 추출: {len(validated_data)}개 항목")
-            log_progress(f"   📝 시트 업로드: {len(rows_to_append)}개 행")
-            log_progress(f"   ⏱️ 처리 시간: {processing_time:.2f}초")
-            log_progress(f"   📈 전체 진행률: {i}/{len(pdf_files)} ({(i/len(pdf_files)*100):.1f}%)")
-            log_progress(f"===== {pdf_file} Vertex AI 처리 완료 =====")
+            log_progress(f"✅ [{i}/{len(pdf_files)}] '{pdf_file}' 처리 완료 ({processing_time:.2f}초). 시트에 {len(rows_to_append)}개 행 추가.")
 
         except Exception as e:
-            error_message = f"🚨 [{i}/{len(pdf_files)}] '{pdf_file}' Vertex AI 처리 중 오류 발생: {e}"
+            error_message = f"🚨 [{i}/{len(pdf_files)}] '{pdf_file}' 처리 중 오류 발생: {e}"
             log_progress(error_message)
             
             # 오류 로그에 기록
